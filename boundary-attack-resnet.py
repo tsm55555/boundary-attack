@@ -88,8 +88,8 @@ def get_diff(sample_1, sample_2):
 def boundary_attack():
 	# Load model, images and other parameters
 	classifier = ResNet50(weights='imagenet')
-	initial_sample = preprocess('images/original/awkward_moment_seal.png')
-	target_sample = preprocess('images/original/bad_joke_eel.png')
+	initial_sample = preprocess('/content/boundary-attack/images/original/awkward_moment_seal.png')
+	target_sample = preprocess('/content/boundary-attack/images/original/bad_joke_eel.png')
 	folder = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 	os.mkdir(os.path.join("images", folder))
 	save_image(np.copy(initial_sample), classifier, folder)
@@ -126,7 +126,7 @@ def boundary_attack():
 			for i in np.arange(10):
 				trial_sample = adversarial_sample + orthogonal_perturbation(delta, adversarial_sample, target_sample)
 				trial_samples.append(trial_sample)
-			predictions = classifier.predict(trial_samples)
+			predictions = classifier.predict(trial_samples[i])
 			n_calls += 10
 			predictions = np.argmax(predictions, axis=1)
 			d_score = np.mean(predictions == attack_class)
