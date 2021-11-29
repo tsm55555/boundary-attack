@@ -9,9 +9,9 @@ import time
 import os
 from PIL import Image
 
-from keras.applications.resnet50 import ResNet50
+from tensorflow.keras.applications.resnet50 import ResNet50
 from keras.preprocessing import image
-from keras.applications.resnet50 import preprocess_input, decode_predictions
+from tensorflow.keras.applications.resnet50 import preprocess_input, decode_predictions
 
 
 RESNET_MEAN = np.array([103.939, 116.779, 123.68])
