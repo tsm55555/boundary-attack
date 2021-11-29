@@ -5,94 +5,105 @@ except:
 	raw_input = input
 
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import gridspec
+from keras.datasets import mnist
+import pickle
 import time
+import datetime
 import os
 from PIL import Image
+import json
 
 from tensorflow.keras.applications.resnet50 import ResNet50
 from keras.preprocessing import image
 from tensorflow.keras.applications.resnet50 import preprocess_input, decode_predictions
 
 
-RESNET_MEAN = np.array([103.939, 116.779, 123.68])
-
-
 def orthogonal_perturbation(delta, prev_sample, target_sample):
-	"""Generate orthogonal perturbation."""
-	perturb = np.random.randn(1, 224, 224, 3)
-	perturb /= np.linalg.norm(perturb, axis=(1, 2))
+	prev_sample = prev_sample.reshape(224, 224, 3)
+	# Generate perturbation
+	perturb = np.random.randn(224, 224, 3)
+	perturb /= get_diff(perturb, np.zeros_like(perturb))
 	perturb *= delta * np.mean(get_diff(target_sample, prev_sample))
 	# Project perturbation onto sphere around target
-	diff = (target_sample - prev_sample).astype(np.float32) # Orthorgonal vector to sphere surface
-	diff /= get_diff(target_sample, prev_sample) # Orthogonal unit vector
-	# We project onto the orthogonal then subtract from perturb
-	# to get projection onto sphere surface
-	perturb -= (np.vdot(perturb, diff) / np.linalg.norm(diff)**2) * diff
+	diff = (target_sample - prev_sample).astype(np.float32)
+	diff /= get_diff(target_sample, prev_sample)
+	diff = diff.reshape(3, 224, 224)
+	perturb = perturb.reshape(3, 224, 224)
+	for i, channel in enumerate(diff):
+		perturb[i] -= np.dot(perturb[i], channel) * channel
 	# Check overflow and underflow
-	overflow = (prev_sample + perturb) - 255 + RESNET_MEAN
+	mean = [103.939, 116.779, 123.68]
+	perturb = perturb.reshape(224, 224, 3)
+	overflow = (prev_sample + perturb) - np.concatenate((np.ones((224, 224, 1)) * (255. - mean[0]), np.ones((224, 224, 1)) * (255. - mean[1]), np.ones((224, 224, 1)) * (255. - mean[2])), axis=2)
+	overflow = overflow.reshape(224, 224, 3)
 	perturb -= overflow * (overflow > 0)
-	underflow = -RESNET_MEAN
+	underflow = np.concatenate((np.ones((224, 224, 1)) * (0. - mean[0]), np.ones((224, 224, 1)) * (0. - mean[1]), np.ones((224, 224, 1)) * (0. - mean[2])), axis=2) - (prev_sample + perturb)
+	underflow = underflow.reshape(224, 224, 3)
 	perturb += underflow * (underflow > 0)
 	return perturb
 
-
 def forward_perturbation(epsilon, prev_sample, target_sample):
-	"""Generate forward perturbation."""
 	perturb = (target_sample - prev_sample).astype(np.float32)
+	perturb /= get_diff(target_sample, prev_sample)
 	perturb *= epsilon
 	return perturb
 
-
 def get_converted_prediction(sample, classifier):
-	"""
-	The original sample is dtype float32, but is converted
-	to uint8 when exported as an image. The loss of precision
-	often causes the label of the image to change, particularly
-	because we are very close to the boundary of the two classes.
-	This function checks for the label of the exported sample
-	by simulating the export process.
-	"""
-	sample = (sample + RESNET_MEAN).astype(np.uint8).astype(np.float32) - RESNET_MEAN
+	sample = sample.reshape(224, 224, 3)
+	mean = [103.939, 116.779, 123.68]
+	sample[..., 0] += mean[0]
+	sample[..., 1] += mean[1]
+	sample[..., 2] += mean[2]
+	sample = sample[..., ::-1].astype(np.uint8)
+	sample = sample.astype(np.float32).reshape(1, 224, 224, 3)
+	sample = sample[..., ::-1]
+	mean = [103.939, 116.779, 123.68]
+	sample[..., 0] -= mean[0]
+	sample[..., 1] -= mean[1]
+	sample[..., 2] -= mean[2]
 	label = decode_predictions(classifier.predict(sample), top=1)[0][0][1]
 	return label
 
-
-def save_image(sample, classifier, folder):
-	"""Export image file."""
+def draw(sample, classifier, folder):
 	label = get_converted_prediction(np.copy(sample), classifier)
-	sample = sample[0]
+	sample = sample.reshape(224, 224, 3)
 	# Reverse preprocessing, see https://github.com/keras-team/keras/blob/master/keras/applications/imagenet_utils.py
-	sample += RESNET_MEAN
+	mean = [103.939, 116.779, 123.68]
+	sample[..., 0] += mean[0]
+	sample[..., 1] += mean[1]
+	sample[..., 2] += mean[2]
 	sample = sample[..., ::-1].astype(np.uint8)
 	# Convert array to image and save
 	sample = Image.fromarray(sample)
-	id_no = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+	id_no = time.strftime('%Y%m%d_%H%M%S', datetime.datetime.now().timetuple())
 	# Save with predicted label for image (may not be adversarial due to uint8 conversion)
-	sample.save(os.path.join("/content", folder, "{}_{}.png".format(id_no, label)))
-
+	sample.save(os.path.join("/content/output", folder, "{}_{}.png".format(id_no, label)))
 
 def preprocess(sample_path):
-	"""Load and preprocess image file."""
 	img = image.load_img(sample_path, target_size=(224, 224))
 	x = image.img_to_array(img)
 	x = np.expand_dims(x, axis=0)
 	x = preprocess_input(x)
 	return x
 
-
 def get_diff(sample_1, sample_2):
-	"""Channel-wise norm of difference between samples."""
-	return np.linalg.norm(sample_1 - sample_2, axis=(1, 2))
-
+	sample_1 = sample_1.reshape(3, 224, 224)
+	sample_2 = sample_2.reshape(3, 224, 224)
+	diff = []
+	for i, channel in enumerate(sample_1):
+		diff.append(np.linalg.norm((channel - sample_2[i]).astype(np.float32)))
+	return np.array(diff)
 
 def boundary_attack():
-	# Load model, images and other parameters
 	classifier = ResNet50(weights='imagenet')
 	initial_sample = preprocess('/content/boundary-attack/images/original/awkward_moment_seal.png')
 	target_sample = preprocess('/content/boundary-attack/images/original/bad_joke_eel.png')
-	folder = "output"
-	os.mkdir(os.path.join("/content", folder))
-	save_image(np.copy(initial_sample), classifier, folder)
+	
+	folder = time.strftime('%Y%m%d_%H%M%S', datetime.datetime.now().timetuple())
+	os.mkdir(os.path.join("/content/output", folder))
+	draw(np.copy(initial_sample), classifier, folder)
 	attack_class = np.argmax(classifier.predict(initial_sample))
 	target_class = np.argmax(classifier.predict(target_sample))
 
@@ -104,8 +115,8 @@ def boundary_attack():
 
 	# Move first step to the boundary
 	while True:
-		trial_sample = adversarial_sample + forward_perturbation(epsilon, adversarial_sample, target_sample)
-		prediction = classifier.predict(trial_sample)
+		trial_sample = adversarial_sample + forward_perturbation(epsilon * get_diff(adversarial_sample, target_sample), adversarial_sample, target_sample)
+		prediction = classifier.predict(trial_sample.reshape(1, 224, 224, 3))
 		n_calls += 1
 		if np.argmax(prediction) == attack_class:
 			adversarial_sample = trial_sample
@@ -113,10 +124,8 @@ def boundary_attack():
 		else:
 			epsilon *= 0.9
 
-	# Iteratively run attack
 	while True:
 		print("Step #{}...".format(n_steps))
-		# Orthogonal step
 		print("\tDelta step...")
 		d_step = 0
 		while True:
@@ -126,7 +135,7 @@ def boundary_attack():
 			for i in np.arange(10):
 				trial_sample = adversarial_sample + orthogonal_perturbation(delta, adversarial_sample, target_sample)
 				trial_samples.append(trial_sample)
-			predictions = classifier.predict(trial_samples[i])
+			predictions = classifier.predict(np.array(trial_samples).reshape(-1, 224, 224, 3))
 			n_calls += 10
 			predictions = np.argmax(predictions, axis=1)
 			d_score = np.mean(predictions == attack_class)
@@ -139,14 +148,13 @@ def boundary_attack():
 				break
 			else:
 				delta *= 0.9
-		# Forward step
 		print("\tEpsilon step...")
 		e_step = 0
 		while True:
 			e_step += 1
 			print("\t#{}".format(e_step))
-			trial_sample = adversarial_sample + forward_perturbation(epsilon, adversarial_sample, target_sample)
-			prediction = classifier.predict(trial_sample)
+			trial_sample = adversarial_sample + forward_perturbation(epsilon * get_diff(adversarial_sample, target_sample), adversarial_sample, target_sample)
+			prediction = classifier.predict(trial_sample.reshape(1, 224, 224, 3))
 			n_calls += 1
 			if np.argmax(prediction) == attack_class:
 				adversarial_sample = trial_sample
@@ -156,25 +164,24 @@ def boundary_attack():
 					break
 			else:
 				epsilon *= 0.5
-
 		n_steps += 1
-		chkpts = [1, 5, 10, 50, 100, 500]
+		chkpts = [1, 5, 10, 50, 100, 500, 1000]
 		if (n_steps in chkpts) or (n_steps % 500 == 0):
 			print("{} steps".format(n_steps))
-			save_image(np.copy(adversarial_sample), classifier, folder)
+			draw(np.copy(adversarial_sample), classifier, folder)
 		diff = np.mean(get_diff(adversarial_sample, target_sample))
+		realdiff = np.sum((adversarial_sample/255 - target_sample/255 )**2)**0.5
 		if diff <= 1e-3 or e_step > 500:
 			print("{} steps".format(n_steps))
 			print("Mean Squared Error: {}".format(diff))
-			save_image(np.copy(adversarial_sample), classifier, folder)
+			draw(np.copy(adversarial_sample), classifier, folder)
 			break
-
 		print("Mean Squared Error: {}".format(diff))
+		print("Real Mean Squared Error: {}".format(realdiff))
 		print("Calls: {}".format(n_calls))
 		print("Attack Class: {}".format(attack_class))
 		print("Target Class: {}".format(target_class))
 		print("Adversarial Class: {}".format(np.argmax(prediction)))
-
 
 if __name__ == "__main__":
 	boundary_attack()
