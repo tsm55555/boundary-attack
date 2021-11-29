@@ -90,8 +90,8 @@ def boundary_attack():
 	classifier = ResNet50(weights='imagenet')
 	initial_sample = preprocess('/content/boundary-attack/images/original/awkward_moment_seal.png')
 	target_sample = preprocess('/content/boundary-attack/images/original/bad_joke_eel.png')
-	folder = time.strftime('%Y%m%d_%H%M%S', time.localtime())
-	os.mkdir(os.path.join("images", folder))
+	folder = "output"
+	os.mkdir(os.path.join("/content", folder))
 	save_image(np.copy(initial_sample), classifier, folder)
 	attack_class = np.argmax(classifier.predict(initial_sample))
 	target_class = np.argmax(classifier.predict(target_sample))
