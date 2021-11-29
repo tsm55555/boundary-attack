@@ -68,7 +68,7 @@ def save_image(sample, classifier, folder):
 	sample = Image.fromarray(sample)
 	id_no = time.strftime('%Y%m%d_%H%M%S', time.localtime())
 	# Save with predicted label for image (may not be adversarial due to uint8 conversion)
-	sample.save(os.path.join("images", folder, "{}_{}.png".format(id_no, label)))
+	sample.save(os.path.join("/content", folder, "{}_{}.png".format(id_no, label)))
 
 
 def preprocess(sample_path):
